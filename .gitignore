@@ -1,0 +1,10 @@
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfplan
+*.tfstate
+*.tfstate.backup
+
+# Generated cluster-specific files
+*-trust-policy.json
+*-patch-autonode.json
