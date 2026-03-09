@@ -19,40 +19,35 @@ def shell(command):
 
 usage = """
 usage: %prog [options]
+Creates a ROSA HCP cluster on existing shared infrastructure.
+
 Inputs:
 - Cluster name
-- AWS region
-Outputs:
-- A new VPC with public and private subnets, NAT gateway, and internet gateway
-- A standard ROSA HCP cluster
+- Infra state file (from infra-up.py)
 
-Note:
-- Creates a single-AZ VPC in 10.0.0.0/16. If something exists in that address space
-  already in the region, the installation will fail.
+Outputs:
+- Operator roles for the cluster
+- A ROSA HCP cluster on the shared VPC
+- Per-cluster state file: cluster-<name>.json
 """
 
 parser = OptionParser(usage=usage)
-parser.add_option("-c", "--cluster-name", dest="name", help="Hosted cluster name")
-parser.add_option("-r", "--region", dest="region", default="us-east-1", help="Region (default: us-east-1)")
+parser.add_option("-c", "--cluster-name", dest="name", help="Cluster name (max 15 chars, lowercase alphanumeric + hyphens)")
+parser.add_option("-f", "--infra-file", dest="infra_file", help="Path to infra state file (from infra-up.py)")
 parser.add_option("-v", "--version", dest="version", default=None, help="OpenShift version (default: latest available)")
 parser.add_option("-p", "--profile", dest="profile", default=None, help="AWS profile to use")
-parser.add_option("-b", "--billing-account", dest="billing_account", default=None, help="AWS billing account ID (default: uses infrastructure account)")
 parser.add_option("-a", "--autonode", dest="autonode", action="store_true", default=False, help="Enable AutoNode (Karpenter) on the cluster")
-parser.add_option("-z", "--zero-egress", dest="zero_egress", action="store_true", default=False, help="Create a zero-egress (private, no internet) cluster")
 
 (options, args) = parser.parse_args()
 
 try:
     cluster_name = options.name
-    region = options.region
+    infra_file = options.infra_file
     version = options.version
-    billing_account = options.billing_account
     profile = options.profile
-
     autonode = options.autonode
-    zero_egress = options.zero_egress
 
-    if not cluster_name:
+    if not cluster_name or not infra_file:
         parser.print_help()
         exit(0)
 
@@ -61,26 +56,42 @@ try:
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    whoami = json.loads(shell("rosa whoami -ojson"))
-    account_id = whoami["AWS Account ID"]
+    # Load infra state
+    with open(infra_file) as f:
+        infra = json.load(f)
 
-    shell(
-        f"rosa create account-roles --mode=auto --yes --hosted-cp --prefix {cluster_name}"
-    )
+    env_name = infra["name"]
+    region = infra["region"]
+    account_id = infra["account_id"]
+    oidc_config_id = infra["oidc_config_id"]
+    account_role_prefix = infra["account_role_prefix"]
+    private_subnet_ids = infra["private_subnet_ids"]
+    public_subnet_ids = infra["public_subnet_ids"]
+    billing_account = infra.get("billing_account", "")
+    zero_egress = infra.get("zero_egress", False)
+    vpc_id = infra["vpc_id"]
 
-    oidc_json = shell(f"rosa create oidc-config --mode=auto --yes -o json")
-    oidc_config_id = json.loads(oidc_json)["id"]
+    if cluster_name in infra.get("clusters", []):
+        print(f"Error: Cluster '{cluster_name}' already exists in {infra_file}.")
+        exit(1)
 
+    cluster_state_file = os.path.join(script_dir, f"cluster-{cluster_name}.json")
+    if os.path.exists(cluster_state_file):
+        print(f"Error: Cluster state file {cluster_state_file} already exists.")
+        exit(1)
+
+    # Zero-egress: attach ECR ReadOnly policy to shared worker role
     if zero_egress:
         shell(
-            f"aws iam attach-role-policy --role-name {cluster_name}-HCP-ROSA-Worker-Role "
+            f"aws iam attach-role-policy --role-name {account_role_prefix}-HCP-ROSA-Worker-Role "
             f"--policy-arn arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
         )
 
+    # Create operator roles for this cluster (using shared OIDC config)
     shell(
         f"rosa create operator-roles --mode=auto --yes --hosted-cp "
         f"--prefix={cluster_name} --oidc-config-id={oidc_config_id} "
-        f"--installer-role-arn arn:aws:iam::{account_id}:role/{cluster_name}-HCP-ROSA-Installer-Role"
+        f"--installer-role-arn arn:aws:iam::{account_id}:role/{account_role_prefix}-HCP-ROSA-Installer-Role"
     )
 
     # If autonode, get tech-preview shard info and override region
@@ -98,34 +109,18 @@ try:
         print(f"Using tech-preview shard: {shard_id} in {shard_region}")
         shard_props = f"--properties provision_shard_id:{shard_id} "
 
-    shell(f"terraform -chdir={script_dir} init")
-    shell(
-        f"terraform -chdir={script_dir} plan -out rosa.tfplan "
-        f"-var 'cluster_name={cluster_name}' "
-        f"-var 'region={region}' "
-        f"-var 'vpc_cidr_block=10.0.0.0/16' "
-        f"-var 'private_subnets=[\"10.0.0.0/24\"]' "
-        f"-var 'public_subnets=[\"10.0.128.0/24\"]' "
-        f"-var 'availability_zones=[\"{region}a\"]' "
-        f"-var 'zero_egress={str(zero_egress).lower()}'"
-    )
-    shell(f'terraform -chdir={script_dir} apply "rosa.tfplan"')
-
-    terraform_out = shell(f"terraform -chdir={script_dir} output -json")
-    tf_output = json.loads(terraform_out)
-
-    private_ids = json.loads(tf_output["private_subnet_ids"]["value"])
+    # Build subnet list
     if zero_egress:
-        subnet_ids = ",".join(private_ids)
+        subnet_ids = ",".join(private_subnet_ids)
     else:
-        public_ids = json.loads(tf_output["public_subnet_ids"]["value"])
-        subnet_ids = ",".join(public_ids + private_ids)
+        subnet_ids = ",".join(public_subnet_ids + private_subnet_ids)
 
+    # Create the cluster
     shell(
         f"rosa create cluster --cluster-name {cluster_name} --sts --yes --mode auto "
-        f"--role-arn arn:aws:iam::{account_id}:role/{cluster_name}-HCP-ROSA-Installer-Role "
-        f"--support-role-arn arn:aws:iam::{account_id}:role/{cluster_name}-HCP-ROSA-Support-Role "
-        f"--worker-iam-role arn:aws:iam::{account_id}:role/{cluster_name}-HCP-ROSA-Worker-Role "
+        f"--role-arn arn:aws:iam::{account_id}:role/{account_role_prefix}-HCP-ROSA-Installer-Role "
+        f"--support-role-arn arn:aws:iam::{account_id}:role/{account_role_prefix}-HCP-ROSA-Support-Role "
+        f"--worker-iam-role arn:aws:iam::{account_id}:role/{account_role_prefix}-HCP-ROSA-Worker-Role "
         f"--operator-roles-prefix {cluster_name} "
         f"--oidc-config-id {oidc_config_id} "
         f"--region {region} "
@@ -143,6 +138,21 @@ try:
         f"{'--properties zero_egress:true ' if zero_egress else ''}"
         f"--hosted-cp"
     )
+
+    # Per-cluster state
+    cluster_state = {
+        "cluster_name": cluster_name,
+        "infra_file": os.path.basename(infra_file),
+        "env_name": env_name,
+        "region": region,
+        "account_id": account_id,
+        "oidc_config_id": oidc_config_id,
+        "operator_role_prefix": cluster_name,
+        "account_role_prefix": account_role_prefix,
+        "zero_egress": zero_egress,
+        "autonode": autonode,
+        "autonode_role_arn": "",
+    }
 
     if autonode:
         # Wait for cluster to be ready
@@ -201,6 +211,7 @@ try:
         shell(f"aws iam attach-role-policy --role-name {role_name} --policy-arn {policy_arn}")
 
         role_arn = f"arn:aws:iam::{account_id}:role/{role_name}"
+        cluster_state["autonode_role_arn"] = role_arn
 
         # Enable AutoNode via OCM patch
         print("Enabling AutoNode on cluster...")
@@ -219,9 +230,6 @@ try:
         print("Tagging subnets and security groups for Karpenter...")
         os.environ["AWS_REGION"] = region
 
-        # Get VPC ID from terraform
-        vpc_id = tf_output["vpc_id"]["value"]
-
         # Find the default security group for the VPC
         sg_id = shell(
             f'aws ec2 describe-security-groups --filters '
@@ -229,8 +237,7 @@ try:
             f'--query "SecurityGroups[0].GroupId" --output text'
         ).strip()
 
-        # Use the private subnet from terraform output
-        private_subnet = private_ids[0]
+        private_subnet = private_subnet_ids[0]
 
         resources = []
         if sg_id and sg_id != "None":
@@ -252,9 +259,22 @@ try:
         print("Default OpenshiftEC2NodeClass should be created automatically.")
         print("Create a NodePool to start using AutoNode - see docs for examples.")
 
+    # Write per-cluster state
+    with open(cluster_state_file, "w") as f:
+        json.dump(cluster_state, f, indent=2)
+
+    # Update infra state - add cluster to list
+    infra["clusters"].append(cluster_name)
+    with open(infra_file, "w") as f:
+        json.dump(infra, f, indent=2)
+
+    print(f"\nCluster '{cluster_name}' created successfully on environment '{env_name}'.")
+    print(f"Cluster state: {cluster_state_file}")
+    print(f"\nTo tear down: ./down.py -c {cluster_name} -f {infra_file}")
+
 except Exception as e:
     print(f"Error: {e}")
     print(
-        f"Run ./down.py -c {cluster_name} to remove old operator roles, oidc config and account roles before retrying."
+        f"Run ./down.py -c {cluster_name} -f {infra_file} to clean up before retrying."
     )
     exit(1)
