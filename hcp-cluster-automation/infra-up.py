@@ -16,6 +16,15 @@ def shell(command):
     return ""
 
 
+def shell_output(command):
+    print(f"\n> {command}")
+    result = subprocess.run(command, shell=True, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(result.stderr)
+        raise RuntimeError(f"Command failed with exit code {result.returncode}")
+    return result.stdout
+
+
 usage = """
 usage: %prog [options]
 Creates shared infrastructure for ROSA HCP clusters.
@@ -64,7 +73,7 @@ try:
         exit(1)
 
     # Get AWS account ID
-    whoami = json.loads(shell("rosa whoami -ojson"))
+    whoami = json.loads(shell_output("rosa whoami -ojson"))
     account_id = whoami["AWS Account ID"]
 
     # Create account roles (shared across clusters in this env)
@@ -73,7 +82,7 @@ try:
     )
 
     # Create OIDC config (shared across clusters in this env)
-    oidc_json = shell("rosa create oidc-config --mode=auto --yes -o json")
+    oidc_json = shell_output("rosa create oidc-config --mode=auto --yes -o json")
     oidc_config_id = json.loads(oidc_json)["id"]
 
     # Create VPC via Terraform
@@ -93,7 +102,7 @@ try:
     )
     shell(f'terraform -chdir={script_dir} apply -state={tf_state_file} "rosa.tfplan"')
 
-    terraform_out = shell(f"terraform -chdir={script_dir} output -state={tf_state_file} -json")
+    terraform_out = shell_output(f"terraform -chdir={script_dir} output -state={tf_state_file} -json")
     tf_output = json.loads(terraform_out)
 
     vpc_id = tf_output["vpc_id"]["value"]
