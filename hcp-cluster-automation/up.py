@@ -16,6 +16,15 @@ def shell(command):
     return ""
 
 
+def shell_output(command):
+    print(f"\n> {command}")
+    result = subprocess.run(command, shell=True, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(result.stderr)
+        raise RuntimeError(f"Command failed with exit code {result.returncode}")
+    return result.stdout
+
+
 usage = """
 usage: %prog [options]
 Creates a ROSA HCP cluster on existing shared infrastructure.
@@ -97,7 +106,7 @@ try:
     shard_props = ""
     if autonode:
         print("AutoNode enabled - getting tech-preview shard info...")
-        shard_json = shell('ocm get /api/osd_fleet_mgmt/v1/service_clusters -p "search=sector=\'tech-preview\'"')
+        shard_json = shell_output('ocm get /api/osd_fleet_mgmt/v1/service_clusters -p "search=sector=\'tech-preview\'"')
         shard_data = json.loads(shard_json)
         if not shard_data.get("items"):
             raise RuntimeError("No tech-preview shard found")
@@ -159,20 +168,20 @@ try:
         shell(f"rosa logs install --cluster={cluster_name} --watch")
 
         # Get cluster ID
-        cluster_json = shell(f"rosa describe cluster --cluster={cluster_name} -o json")
+        cluster_json = shell_output(f"rosa describe cluster --cluster={cluster_name} -o json")
         cluster_id = json.loads(cluster_json)["id"]
 
         # Create AutoNode IAM policy
         print("Creating AutoNode IAM policy...")
         policy_file = os.path.join(script_dir, "autonode-policy.json")
-        policy_arn = shell(
+        policy_arn = shell_output(
             f"aws iam create-policy --policy-name {cluster_name}-autonode "
             f"--policy-document file://{policy_file} "
             f"--query 'Policy.Arn' --output text"
         ).strip()
 
         # Get OIDC provider URL
-        oidc_list = shell("rosa list oidc-config -o json")
+        oidc_list = shell_output("rosa list oidc-config -o json")
         oidc_provider_url = None
         for oidc in json.loads(oidc_list):
             if oidc["id"] == oidc_config_id:
@@ -230,7 +239,7 @@ try:
         os.environ["AWS_REGION"] = region
 
         # Find the default security group for the VPC
-        sg_id = shell(
+        sg_id = shell_output(
             f'aws ec2 describe-security-groups --filters '
             f'"Name=vpc-id,Values={vpc_id}" "Name=group-name,Values=default" '
             f'--query "SecurityGroups[0].GroupId" --output text'
