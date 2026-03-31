@@ -2,19 +2,18 @@
 
 import json
 import os
+import subprocess
+import sys
 
 from optparse import OptionParser
 
 
 def shell(command):
-    print(command)
-    f = os.popen(command)
-    stdout = f.read()
-    error = f.close()
-    print(stdout)
-    if error:
-        raise RuntimeError(stdout)
-    return stdout
+    print(f"\n> {command}")
+    result = subprocess.run(command, shell=True, stdout=sys.stdout, stderr=sys.stderr)
+    if result.returncode != 0:
+        raise RuntimeError(f"Command failed with exit code {result.returncode}")
+    return ""
 
 
 usage = """
