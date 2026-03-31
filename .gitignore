@@ -1,3 +1,6 @@
+# Python
+__pycache__/
+
 # Terraform
 .terraform/
 .terraform.lock.hcl
@@ -8,3 +11,7 @@
 # Generated cluster-specific files
 *-trust-policy.json
 *-patch-autonode.json
+
+# State files from infra-up.py and up.py
+cluster-*.json
+infra-*.json

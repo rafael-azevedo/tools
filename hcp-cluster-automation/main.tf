@@ -18,7 +18,7 @@ module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
   version = ">= 5.8.1"
 
-  name = "${var.cluster_name}-vpc"
+  name = "${var.env_name}-vpc"
   cidr = var.vpc_cidr_block
 
   azs             = var.availability_zones
@@ -43,7 +43,7 @@ module "vpc" {
   tags = {
     Terraform    = "true"
     service      = "ROSA"
-    cluster_name = var.cluster_name
+    env_name = var.env_name
   }
 }
 
@@ -74,7 +74,7 @@ resource "aws_vpc_endpoint" "sts" {
   tags = {
     Terraform    = "true"
     service      = "ROSA"
-    cluster_name = var.cluster_name
+    env_name = var.env_name
   }
 }
 
@@ -91,7 +91,7 @@ resource "aws_vpc_endpoint" "ecr_api" {
   tags = {
     Terraform    = "true"
     service      = "ROSA"
-    cluster_name = var.cluster_name
+    env_name = var.env_name
   }
 }
 
@@ -108,7 +108,7 @@ resource "aws_vpc_endpoint" "ecr_dkr" {
   tags = {
     Terraform    = "true"
     service      = "ROSA"
-    cluster_name = var.cluster_name
+    env_name = var.env_name
   }
 }
 
@@ -123,7 +123,7 @@ resource "aws_vpc_endpoint" "s3" {
   tags = {
     Terraform    = "true"
     service      = "ROSA"
-    cluster_name = var.cluster_name
+    env_name = var.env_name
   }
 }
 
@@ -158,15 +158,15 @@ variable "zero_egress" {
   default = false
 }
 
-variable "cluster_name" {
-  description = "Name of the ROSA HCP cluster."
+variable "env_name" {
+  description = "Name of the shared environment (used for VPC and resource naming)."
   type        = string
-  default     = "my-hcp-cluster"
+  default     = "my-hcp-env"
 
   validation {
-    condition     = can(regex("^[a-z][-a-z0-9]{0,13}[a-z0-9]$", var.cluster_name))
+    condition     = can(regex("^[a-z][-a-z0-9]{0,13}[a-z0-9]$", var.env_name))
     error_message = <<-EOT
-      ROSA cluster names must be less than 16 characters.
+      Environment names must be less than 16 characters.
         May only contain lower case, alphanumeric, or hyphens characters.
     EOT
   }
