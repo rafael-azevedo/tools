@@ -78,6 +78,98 @@ try:
 except RuntimeError:
     print("Account roles already deleted or not found.")
 
+# Clean up orphaned VPC resources not managed by Terraform
+vpc_id = infra.get("vpc_id", "")
+region = infra.get("region", "us-east-1")
+profile_flag = f"--profile {options.profile}" if options.profile else ""
+
+if vpc_id:
+    print(f"\nWARNING: Checking for orphaned resources in VPC {vpc_id} not managed by Terraform.")
+    print("These may have been created by ROSA or Karpenter and left behind after cluster deletion.")
+
+    # Check if there are any orphaned resources
+    orphaned_sgs = json.loads(
+        subprocess.run(
+            f"aws ec2 describe-security-groups --filters Name=vpc-id,Values={vpc_id} "
+            f"--query \"SecurityGroups[?GroupName!='default'].GroupId\" --output json "
+            f"--region {region} {profile_flag}",
+            shell=True, capture_output=True, text=True
+        ).stdout or "[]"
+    )
+    orphaned_enis = json.loads(
+        subprocess.run(
+            f"aws ec2 describe-network-interfaces --filters Name=vpc-id,Values={vpc_id} "
+            f"--query \"NetworkInterfaces[].NetworkInterfaceId\" --output json "
+            f"--region {region} {profile_flag}",
+            shell=True, capture_output=True, text=True
+        ).stdout or "[]"
+    )
+    orphaned_igws = json.loads(
+        subprocess.run(
+            f"aws ec2 describe-internet-gateways --filters Name=attachment.vpc-id,Values={vpc_id} "
+            f"--query \"InternetGateways[].InternetGatewayId\" --output json "
+            f"--region {region} {profile_flag}",
+            shell=True, capture_output=True, text=True
+        ).stdout or "[]"
+    )
+    orphaned_subnets = json.loads(
+        subprocess.run(
+            f"aws ec2 describe-subnets --filters Name=vpc-id,Values={vpc_id} "
+            f"--query \"Subnets[].SubnetId\" --output json "
+            f"--region {region} {profile_flag}",
+            shell=True, capture_output=True, text=True
+        ).stdout or "[]"
+    )
+
+    has_orphans = orphaned_sgs or orphaned_enis or orphaned_igws or orphaned_subnets
+
+    if has_orphans:
+        print("\nFound orphaned resources:")
+        for sg in orphaned_sgs:
+            print(f"  Security Group: {sg}")
+        for eni in orphaned_enis:
+            print(f"  Network Interface: {eni}")
+        for igw in orphaned_igws:
+            print(f"  Internet Gateway: {igw}")
+        for subnet in orphaned_subnets:
+            print(f"  Subnet: {subnet}")
+
+        confirm = input("\nDelete these orphaned resources? (y/N): ").strip().lower()
+        if confirm != "y":
+            print("Skipping orphan cleanup. Terraform may fail if these block VPC deletion.")
+        else:
+            for sg in orphaned_sgs:
+                print(f"  Deleting security group: {sg}")
+                subprocess.run(
+                    f"aws ec2 delete-security-group --group-id {sg} --region {region} {profile_flag}",
+                    shell=True, stdout=sys.stdout, stderr=sys.stderr
+                )
+            for eni in orphaned_enis:
+                print(f"  Deleting ENI: {eni}")
+                subprocess.run(
+                    f"aws ec2 delete-network-interface --network-interface-id {eni} --region {region} {profile_flag}",
+                    shell=True, stdout=sys.stdout, stderr=sys.stderr
+                )
+            for igw in orphaned_igws:
+                print(f"  Detaching and deleting IGW: {igw}")
+                subprocess.run(
+                    f"aws ec2 detach-internet-gateway --internet-gateway-id {igw} --vpc-id {vpc_id} "
+                    f"--region {region} {profile_flag}",
+                    shell=True, stdout=sys.stdout, stderr=sys.stderr
+                )
+                subprocess.run(
+                    f"aws ec2 delete-internet-gateway --internet-gateway-id {igw} --region {region} {profile_flag}",
+                    shell=True, stdout=sys.stdout, stderr=sys.stderr
+                )
+            for subnet in orphaned_subnets:
+                print(f"  Deleting subnet: {subnet}")
+                subprocess.run(
+                    f"aws ec2 delete-subnet --subnet-id {subnet} --region {region} {profile_flag}",
+                    shell=True, stdout=sys.stdout, stderr=sys.stderr
+                )
+    else:
+        print("No orphaned resources found.")
+
 # Destroy Terraform infrastructure
 print("Destroying Terraform infrastructure...")
 tf_state_file = os.path.join(script_dir, f"infra-{env_name}.tfstate")
