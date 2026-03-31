@@ -1,0 +1,19 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "AllowCentralLogDistributionWrite",
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::<log-distributor-account-id>:root"
+            },
+            "Action": "s3:PutObject",
+            "Resource": "arn:aws:s3:::<your-s3-bucket-name>/*",
+            "Condition": {
+                "StringEquals": {
+                    "s3:x-amz-acl": "bucket-owner-full-control"
+                }
+            }
+        }
+    ]
+}

@@ -15,3 +15,6 @@ __pycache__/
 # State files from infra-up.py and up.py
 cluster-*.json
 infra-*.json
+
+# Local overrides with real values
+*.local.json

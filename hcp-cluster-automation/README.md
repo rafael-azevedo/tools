@@ -127,6 +127,8 @@ All of the above plus:
 - Enables AutoNode via OCM API patch
 - Tags subnets and security groups for Karpenter discovery
 
+After the cluster is created, see [k8s/](k8s/) for example manifests to configure NodePools and test autoscaling. Before AutoNode/Karpenter is GA, these are needed to finish cluster setup and verify things work.
+
 ## State files
 
 | File | Purpose |
