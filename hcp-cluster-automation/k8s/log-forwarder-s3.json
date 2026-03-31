@@ -1,0 +1,10 @@
+{
+  "s3": {
+    "bucket_name": "<your-s3-bucket-name>",
+    "bucket_prefix": "ROSA/cluster-logs/"
+  },
+  "groups": [
+    {"id": "autoscaling"},
+    {"id": "api"}
+  ]
+}
